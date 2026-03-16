@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:xterm/xterm.dart';
@@ -12,42 +12,35 @@ import '../app/theme.dart';
 import '../core/snippet_interpolator.dart';
 import '../data/repositories.dart';
 import '../services/connection_engine.dart';
+import '../services/ssh_key_service.dart';
 import '../services/workspace_controller.dart';
+import 'saved_key_editor_sheet.dart';
 import 'server_editor_sheet.dart';
 
-enum AppSection {
-  servers,
-  sessions,
-  files,
-  snippets,
-  settings,
-}
+enum AppSection { servers, sessions, files, snippets, settings }
 
 extension AppSectionX on AppSection {
   String get label => switch (this) {
-        AppSection.servers => 'Servers',
-        AppSection.sessions => 'Sessions',
-        AppSection.files => 'Files',
-        AppSection.snippets => 'Snippets',
-        AppSection.settings => 'Settings',
-      };
+    AppSection.servers => 'Servers',
+    AppSection.sessions => 'Sessions',
+    AppSection.files => 'Files',
+    AppSection.snippets => 'Snippets',
+    AppSection.settings => 'Settings',
+  };
 
   String get path => '/$name';
 
   IconData get icon => switch (this) {
-        AppSection.servers => Icons.dns_outlined,
-        AppSection.sessions => Icons.terminal_outlined,
-        AppSection.files => Icons.folder_outlined,
-        AppSection.snippets => Icons.bolt_outlined,
-        AppSection.settings => Icons.tune_outlined,
-      };
+    AppSection.servers => Icons.dns_outlined,
+    AppSection.sessions => Icons.terminal_outlined,
+    AppSection.files => Icons.folder_outlined,
+    AppSection.snippets => Icons.bolt_outlined,
+    AppSection.settings => Icons.tune_outlined,
+  };
 }
 
 class HomeShell extends ConsumerWidget {
-  const HomeShell({
-    super.key,
-    required this.section,
-  });
+  const HomeShell({super.key, required this.section});
 
   final AppSection section;
 
@@ -57,14 +50,13 @@ class HomeShell extends ConsumerWidget {
     final workspace = ref.watch(workspaceControllerProvider);
 
     return bootstrap.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
-      error: (error, _) => Scaffold(
-        body: Center(child: Text('Bootstrap failed: $error')),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (error, _) =>
+          Scaffold(body: Center(child: Text('Bootstrap failed: $error'))),
       data: (_) {
-        final terminalFocusMode = section == AppSection.sessions &&
+        final terminalFocusMode =
+            section == AppSection.sessions &&
             workspace.terminalFocusMode &&
             workspace.activeTab != null;
         final wide = MediaQuery.sizeOf(context).width >= 1100;
@@ -75,9 +67,7 @@ class HomeShell extends ConsumerWidget {
         );
 
         if (terminalFocusMode) {
-          return Scaffold(
-            body: content,
-          );
+          return Scaffold(body: content);
         }
 
         if (wide) {
@@ -102,10 +92,7 @@ class HomeShell extends ConsumerWidget {
                 Expanded(child: content),
                 if (showInspector) ...[
                   const VerticalDivider(width: 1),
-                  const SizedBox(
-                    width: 320,
-                    child: _InspectorPanel(),
-                  ),
+                  const SizedBox(width: 320, child: _InspectorPanel()),
                 ],
               ],
             ),
@@ -118,10 +105,7 @@ class HomeShell extends ConsumerWidget {
             selectedIndex: section.index,
             destinations: [
               for (final item in AppSection.values)
-                NavigationDestination(
-                  icon: Icon(item.icon),
-                  label: item.label,
-                ),
+                NavigationDestination(icon: Icon(item.icon), label: item.label),
             ],
             onDestinationSelected: (index) {
               context.go(AppSection.values[index].path);
@@ -134,10 +118,7 @@ class HomeShell extends ConsumerWidget {
 }
 
 class _SectionViewport extends StatelessWidget {
-  const _SectionViewport({
-    required this.section,
-    this.immersive = false,
-  });
+  const _SectionViewport({required this.section, this.immersive = false});
 
   final AppSection section;
   final bool immersive;
@@ -167,14 +148,15 @@ class _InspectorPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final workspace = ref.watch(workspaceControllerProvider);
-    final profiles = ref.watch(profilesProvider).maybeWhen(
+    final profiles = ref
+        .watch(profilesProvider)
+        .maybeWhen(
           data: (value) => value,
           orElse: () => const <ServerProfile>[],
         );
-    final snippets = ref.watch(snippetsProvider).maybeWhen(
-          data: (value) => value,
-          orElse: () => const <Snippet>[],
-        );
+    final snippets = ref
+        .watch(snippetsProvider)
+        .maybeWhen(data: (value) => value, orElse: () => const <Snippet>[]);
 
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -256,148 +238,184 @@ class _ServersPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profilesAsync = ref.watch(profilesProvider);
+    final savedKeysAsync = ref.watch(savedKeysProvider);
 
     return profilesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, _) => Center(child: Text('Failed to load profiles: $error')),
-      data: (profiles) {
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              _PageHeader(
-                title: 'Servers',
-                subtitle:
-                    'Saved hosts, ProxyJump routes, managed-access hints, and secure credentials.',
-                action: FilledButton.icon(
-                  onPressed: () => _openEditor(context, ref, profiles),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add Server'),
+      error: (error, _) =>
+          Center(child: Text('Failed to load profiles: $error')),
+      data: (profiles) => savedKeysAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, _) => Center(child: Text('Failed to load keys: $error')),
+        data: (savedKeys) {
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                _PageHeader(
+                  title: 'Servers',
+                  subtitle:
+                      'Saved hosts, ProxyJump routes, managed-access hints, and reusable SSH key IDs.',
+                  action: FilledButton.icon(
+                    onPressed: () => _openEditor(
+                      context,
+                      ref,
+                      profiles,
+                      savedKeys: savedKeys,
+                    ),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add Server'),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              Expanded(
-                child: ListView.separated(
-                  itemCount: profiles.length,
-                  separatorBuilder: (context, index) =>
-                      const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final profile = profiles[index];
-                    return DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceContainerLow,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(18),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        profile.label,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleLarge,
+                const SizedBox(height: 20),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: profiles.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final profile = profiles[index];
+                      return DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          profile.label,
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.titleLarge,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${profile.username}@${profile.host}:${profile.port}',
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuButton<String>(
+                                    onSelected: (value) async {
+                                      switch (value) {
+                                        case 'edit':
+                                          await _openEditor(
+                                            context,
+                                            ref,
+                                            profiles,
+                                            savedKeys: savedKeys,
+                                            initial: profile,
+                                          );
+                                        case 'delete':
+                                          await _deleteProfile(
+                                            context,
+                                            ref,
+                                            profile,
+                                          );
+                                      }
+                                    },
+                                    itemBuilder: (context) => const [
+                                      PopupMenuItem(
+                                        value: 'edit',
+                                        child: Text('Edit'),
                                       ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        '${profile.username}@${profile.host}:${profile.port}',
+                                      PopupMenuItem(
+                                        value: 'delete',
+                                        child: Text('Delete'),
                                       ),
                                     ],
                                   ),
-                                ),
-                                PopupMenuButton<String>(
-                                  onSelected: (value) async {
-                                    switch (value) {
-                                      case 'edit':
-                                        await _openEditor(
-                                          context,
-                                          ref,
-                                          profiles,
-                                          initial: profile,
-                                        );
-                                      case 'delete':
-                                        await _deleteProfile(context, ref, profile);
-                                    }
-                                  },
-                                  itemBuilder: (context) => const [
-                                    PopupMenuItem(
-                                      value: 'edit',
-                                      child: Text('Edit'),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _Badge(label: profile.networkMode.name),
+                                  _Badge(label: profile.authMethod.name),
+                                  if (profile.authMethod ==
+                                          AuthMethod.privateKey &&
+                                      profile.credentialRef != null)
+                                    _Badge(
+                                      label:
+                                          'Key ${profile.credentialRef!.label} (${profile.credentialRef!.id.substring(0, 8)})',
                                     ),
-                                    PopupMenuItem(
-                                      value: 'delete',
-                                      child: Text('Delete'),
+                                  if (profile
+                                      .jumpRoute
+                                      .hopProfileIds
+                                      .isNotEmpty)
+                                    _Badge(
+                                      label:
+                                          'ProxyJump ${profile.jumpRoute.hopProfileIds.length}',
                                     ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                _Badge(label: profile.networkMode.name),
-                                _Badge(label: profile.authMethod.name),
-                                if (profile.jumpRoute.hopProfileIds.isNotEmpty)
-                                  _Badge(
-                                    label:
-                                        'ProxyJump ${profile.jumpRoute.hopProfileIds.length}',
+                                  for (final tag in profile.tags)
+                                    _Badge(label: tag),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              Row(
+                                children: [
+                                  FilledButton.icon(
+                                    onPressed: () async {
+                                      await ref
+                                          .read(
+                                            workspaceControllerProvider
+                                                .notifier,
+                                          )
+                                          .connectProfile(
+                                            profile,
+                                            hostTrustDelegate:
+                                                _MaterialHostTrustDelegate(
+                                                  context,
+                                                ),
+                                          );
+                                      if (context.mounted) {
+                                        context.go(AppSection.sessions.path);
+                                      }
+                                    },
+                                    icon: const Icon(Icons.terminal),
+                                    label: const Text('Connect'),
                                   ),
-                                for (final tag in profile.tags) _Badge(label: tag),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                FilledButton.icon(
-                                  onPressed: () async {
-                                    await ref
-                                        .read(workspaceControllerProvider.notifier)
-                                        .connectProfile(
-                                          profile,
-                                          hostTrustDelegate:
-                                              _MaterialHostTrustDelegate(context),
-                                        );
-                                    if (context.mounted) {
-                                      context.go(AppSection.sessions.path);
-                                    }
-                                  },
-                                  icon: const Icon(Icons.terminal),
-                                  label: const Text('Connect'),
-                                ),
-                                const SizedBox(width: 12),
-                                OutlinedButton.icon(
-                                  onPressed: () => _openEditor(
-                                    context,
-                                    ref,
-                                    profiles,
-                                    initial: profile,
+                                  const SizedBox(width: 12),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _openEditor(
+                                      context,
+                                      ref,
+                                      profiles,
+                                      savedKeys: savedKeys,
+                                      initial: profile,
+                                    ),
+                                    icon: const Icon(Icons.edit_outlined),
+                                    label: const Text('Edit'),
                                   ),
-                                  icon: const Icon(Icons.edit_outlined),
-                                  label: const Text('Edit'),
-                                ),
-                              ],
-                            ),
-                          ],
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -405,6 +423,7 @@ class _ServersPage extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     List<ServerProfile> profiles, {
+    required List<CredentialRef> savedKeys,
     ServerProfile? initial,
   }) async {
     final result = await showModalBottomSheet<ServerEditorResult>(
@@ -414,6 +433,8 @@ class _ServersPage extends ConsumerWidget {
       builder: (context) => ServerEditorSheet(
         initialProfile: initial,
         availableProfiles: profiles,
+        availableKeys: savedKeys,
+        sshKeyService: ref.read(sshKeyServiceProvider),
       ),
     );
 
@@ -421,12 +442,26 @@ class _ServersPage extends ConsumerWidget {
       return;
     }
 
+    for (final savedKey in result.savedKeys) {
+      await ref.read(appRepositoryProvider).saveCredential(savedKey.credential);
+      await ref
+          .read(secureStorageProvider)
+          .persistCredential(
+            savedKey.credential,
+            primarySecret: savedKey.privateKeyPem,
+            publicKey: savedKey.publicKey,
+            passphrase: savedKey.passphrase,
+          );
+    }
+
     await ref.read(appRepositoryProvider).saveProfile(result.profile);
 
     final credential = result.profile.credentialRef;
     if (credential != null &&
         (result.primarySecret != null || result.passphrase != null)) {
-      await ref.read(secureStorageProvider).persistCredential(
+      await ref
+          .read(secureStorageProvider)
+          .persistCredential(
             credential,
             primarySecret: result.primarySecret,
             passphrase: result.passphrase,
@@ -434,9 +469,9 @@ class _ServersPage extends ConsumerWidget {
     }
 
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved ${result.profile.label}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Saved ${result.profile.label}')));
     }
   }
 
@@ -445,7 +480,8 @@ class _ServersPage extends ConsumerWidget {
     WidgetRef ref,
     ServerProfile profile,
   ) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed =
+        await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Delete server?'),
@@ -469,16 +505,11 @@ class _ServersPage extends ConsumerWidget {
     }
 
     await ref.read(appRepositoryProvider).deleteProfile(profile);
-    if (profile.credentialRef != null) {
-      await ref
-          .read(secureStorageProvider)
-          .deleteCredential(profile.credentialRef!.id);
-    }
 
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Deleted ${profile.label}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Deleted ${profile.label}')));
     }
   }
 }
@@ -498,10 +529,7 @@ class _SessionsPage extends ConsumerWidget {
       return Stack(
         children: [
           Positioned.fill(
-            child: _TerminalPanel(
-              tab: activeTab,
-              fullscreen: true,
-            ),
+            child: _TerminalPanel(tab: activeTab, fullscreen: true),
           ),
           SafeArea(
             child: Padding(
@@ -520,10 +548,9 @@ class _SessionsPage extends ConsumerWidget {
                       ),
                       child: Text(
                         activeTab.profile.label,
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelLarge
-                            ?.copyWith(color: Colors.white),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
                       ),
                     ),
                   ),
@@ -600,29 +627,30 @@ class _SessionsPage extends ConsumerWidget {
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: workspace.tabs.length,
-                separatorBuilder: (context, index) =>
-                    const SizedBox(width: 8),
+                separatorBuilder: (context, index) => const SizedBox(width: 8),
                 itemBuilder: (context, index) {
                   final tab = workspace.tabs[index];
                   final active = tab.id == workspace.activeTabId;
                   return FilterChip(
                     selected: active,
-                    avatar: Icon(
-                      switch (tab.status) {
-                        WorkspaceTabStatus.connecting => Icons.sync,
-                        WorkspaceTabStatus.connected => Icons.terminal,
-                        WorkspaceTabStatus.browserFallback => Icons.open_in_browser,
-                        WorkspaceTabStatus.error => Icons.warning_amber_rounded,
-                      },
-                      size: 18,
-                    ),
+                    avatar: Icon(switch (tab.status) {
+                      WorkspaceTabStatus.connecting => Icons.sync,
+                      WorkspaceTabStatus.connected => Icons.terminal,
+                      WorkspaceTabStatus.browserFallback =>
+                        Icons.open_in_browser,
+                      WorkspaceTabStatus.error => Icons.warning_amber_rounded,
+                    }, size: 18),
                     label: Text(tab.profile.label),
                     onSelected: (_) {
-                      ref.read(workspaceControllerProvider.notifier).selectTab(tab.id);
+                      ref
+                          .read(workspaceControllerProvider.notifier)
+                          .selectTab(tab.id);
                     },
                     deleteIcon: const Icon(Icons.close),
                     onDeleted: () {
-                      ref.read(workspaceControllerProvider.notifier).closeTab(tab.id);
+                      ref
+                          .read(workspaceControllerProvider.notifier)
+                          .closeTab(tab.id);
                     },
                   );
                 },
@@ -632,7 +660,8 @@ class _SessionsPage extends ConsumerWidget {
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final showSplit = preferences.splitSessions &&
+                  final showSplit =
+                      preferences.splitSessions &&
                       workspace.splitViewEnabled &&
                       constraints.maxWidth >= 1200 &&
                       workspace.tabs.length >= 2;
@@ -665,10 +694,7 @@ class _SessionsPage extends ConsumerWidget {
 }
 
 class _TerminalPanel extends StatelessWidget {
-  const _TerminalPanel({
-    required this.tab,
-    this.fullscreen = false,
-  });
+  const _TerminalPanel({required this.tab, this.fullscreen = false});
 
   final WorkspaceTab tab;
   final bool fullscreen;
@@ -679,12 +705,13 @@ class _TerminalPanel extends StatelessWidget {
     final terminalBody = switch (tab.status) {
       WorkspaceTabStatus.browserFallback => _BrowserFallbackView(tab: tab),
       _ => TerminalView(
-          tab.terminal,
-          theme: tab.session?.terminalTheme ??
-              terminalThemes[tab.profile.terminalTheme]!,
-          backgroundOpacity: 1,
-          deleteDetection: true,
-        ),
+        tab.terminal,
+        theme:
+            tab.session?.terminalTheme ??
+            terminalThemes[tab.profile.terminalTheme]!,
+        backgroundOpacity: 1,
+        deleteDetection: true,
+      ),
     };
 
     if (fullscreen) {
@@ -704,12 +731,11 @@ class _TerminalPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              tab.profile.label,
-              style: theme.textTheme.titleLarge,
-            ),
+            Text(tab.profile.label, style: theme.textTheme.titleLarge),
             const SizedBox(height: 4),
-            Text(tab.message ?? tab.profile.managedAccessConfig.targetHint ?? ''),
+            Text(
+              tab.message ?? tab.profile.managedAccessConfig.targetHint ?? '',
+            ),
             const SizedBox(height: 16),
             Expanded(
               child: ClipRRect(
@@ -725,9 +751,7 @@ class _TerminalPanel extends StatelessWidget {
 }
 
 class _BrowserFallbackView extends ConsumerWidget {
-  const _BrowserFallbackView({
-    required this.tab,
-  });
+  const _BrowserFallbackView({required this.tab});
 
   final WorkspaceTab tab;
 
@@ -786,7 +810,10 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
 
   @override
   Widget build(BuildContext context) {
-    final activeSession = ref.watch(workspaceControllerProvider).activeTab?.session;
+    final activeSession = ref
+        .watch(workspaceControllerProvider)
+        .activeTab
+        ?.session;
     if (!identical(activeSession, _session)) {
       _session = activeSession;
       _currentPath = activeSession?.startingDirectory ?? '.';
@@ -819,7 +846,9 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed: _session == null ? null : _uploadIntoCurrentDirectory,
+                  onPressed: _session == null
+                      ? null
+                      : _uploadIntoCurrentDirectory,
                   icon: const Icon(Icons.upload_file_outlined),
                   label: const Text('Upload'),
                 ),
@@ -848,79 +877,77 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
                           'The file manager follows the active native SSH session.',
                     )
                   : _loading
-                      ? const Center(child: CircularProgressIndicator())
-                      : _error != null
-                          ? Center(child: Text('Failed to load directory: $_error'))
-                          : ListView.separated(
-                              padding: const EdgeInsets.all(12),
-                              itemCount: _entries.length,
-                              separatorBuilder: (context, index) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (context, index) {
-                                final entry = _entries[index];
-                                return ListTile(
-                                  tileColor: Theme.of(context)
-                                      .colorScheme
-                                      .surface,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(18),
-                                  ),
-                                  leading: Icon(
-                                    entry.isDirectory
-                                        ? Icons.folder_outlined
-                                        : entry.isSymbolicLink
-                                            ? Icons.shortcut_outlined
-                                            : Icons.description_outlined,
-                                  ),
-                                  title: Text(entry.name),
-                                  subtitle: Text(
-                                    entry.isDirectory
-                                        ? 'Directory'
-                                        : '${entry.size ?? 0} bytes',
-                                  ),
-                                  onTap: () async {
-                                    if (entry.isDirectory) {
-                                      setState(() => _currentPath = entry.path);
-                                      await _refresh();
-                                      return;
-                                    }
-                                    await _preview(entry);
-                                  },
-                                  trailing: PopupMenuButton<String>(
-                                    onSelected: (value) async {
-                                      switch (value) {
-                                        case 'preview':
-                                          await _preview(entry);
-                                        case 'rename':
-                                          await _rename(entry);
-                                        case 'delete':
-                                          await _delete(entry);
-                                        case 'download':
-                                          await _download(entry);
-                                      }
-                                    },
-                                    itemBuilder: (context) => const [
-                                      PopupMenuItem(
-                                        value: 'preview',
-                                        child: Text('Preview'),
-                                      ),
-                                      PopupMenuItem(
-                                        value: 'rename',
-                                        child: Text('Rename'),
-                                      ),
-                                      PopupMenuItem(
-                                        value: 'download',
-                                        child: Text('Download'),
-                                      ),
-                                      PopupMenuItem(
-                                        value: 'delete',
-                                        child: Text('Delete'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? Center(child: Text('Failed to load directory: $_error'))
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _entries.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final entry = _entries[index];
+                        return ListTile(
+                          tileColor: Theme.of(context).colorScheme.surface,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          leading: Icon(
+                            entry.isDirectory
+                                ? Icons.folder_outlined
+                                : entry.isSymbolicLink
+                                ? Icons.shortcut_outlined
+                                : Icons.description_outlined,
+                          ),
+                          title: Text(entry.name),
+                          subtitle: Text(
+                            entry.isDirectory
+                                ? 'Directory'
+                                : '${entry.size ?? 0} bytes',
+                          ),
+                          onTap: () async {
+                            if (entry.isDirectory) {
+                              setState(() => _currentPath = entry.path);
+                              await _refresh();
+                              return;
+                            }
+                            await _preview(entry);
+                          },
+                          trailing: PopupMenuButton<String>(
+                            onSelected: (value) async {
+                              switch (value) {
+                                case 'preview':
+                                  await _preview(entry);
+                                case 'rename':
+                                  await _rename(entry);
+                                case 'delete':
+                                  await _delete(entry);
+                                case 'download':
+                                  await _download(entry);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'preview',
+                                child: Text('Preview'),
+                              ),
+                              PopupMenuItem(
+                                value: 'rename',
+                                child: Text('Rename'),
+                              ),
+                              PopupMenuItem(
+                                value: 'download',
+                                child: Text('Download'),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
             ),
           ),
         ],
@@ -966,7 +993,10 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
     if (_currentPath == '/') {
       return;
     }
-    final segments = _currentPath.split('/').where((segment) => segment.isNotEmpty).toList();
+    final segments = _currentPath
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
     if (segments.isNotEmpty) {
       segments.removeLast();
     }
@@ -1047,7 +1077,8 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
     if (_session == null) {
       return;
     }
-    final confirmed = await showDialog<bool>(
+    final confirmed =
+        await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: Text('Delete ${entry.name}?'),
@@ -1080,9 +1111,9 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Downloaded to ${file.path}')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Downloaded to ${file.path}')));
   }
 
   Future<void> _preview(RemoteFileEntry entry) async {
@@ -1097,10 +1128,7 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text(entry.name),
-        content: SizedBox(
-          width: 620,
-          child: _FilePreview(bytes: bytes),
-        ),
+        content: SizedBox(width: 620, child: _FilePreview(bytes: bytes)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
@@ -1113,26 +1141,22 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
 }
 
 class _FilePreview extends StatelessWidget {
-  const _FilePreview({
-    required this.bytes,
-  });
+  const _FilePreview({required this.bytes});
 
   final Uint8List bytes;
 
   @override
   Widget build(BuildContext context) {
     if (_isImage(bytes)) {
-      return InteractiveViewer(
-        child: Image.memory(bytes, fit: BoxFit.contain),
-      );
+      return InteractiveViewer(child: Image.memory(bytes, fit: BoxFit.contain));
     }
 
     return SingleChildScrollView(
       child: SelectableText(
         utf8.decode(bytes, allowMalformed: true),
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              fontFamily: 'monospace',
-            ),
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
       ),
     );
   }
@@ -1159,7 +1183,8 @@ class _SnippetsPage extends ConsumerWidget {
 
     return snippetsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, _) => Center(child: Text('Failed to load snippets: $error')),
+      error: (error, _) =>
+          Center(child: Text('Failed to load snippets: $error')),
       data: (snippets) {
         return Padding(
           padding: const EdgeInsets.all(20),
@@ -1185,7 +1210,9 @@ class _SnippetsPage extends ConsumerWidget {
                     final snippet = snippets[index];
                     return DecoratedBox(
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceContainerLow,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainerLow,
                         borderRadius: BorderRadius.circular(24),
                       ),
                       child: ListTile(
@@ -1197,22 +1224,21 @@ class _SnippetsPage extends ConsumerWidget {
                           children: [
                             IconButton(
                               tooltip: 'Run snippet',
-                              onPressed: () => _runSnippet(context, ref, snippet),
+                              onPressed: () =>
+                                  _runSnippet(context, ref, snippet),
                               icon: const Icon(Icons.play_arrow_outlined),
                             ),
                             IconButton(
                               tooltip: 'Edit snippet',
-                              onPressed: () => _editSnippet(
-                                context,
-                                ref,
-                                snippet: snippet,
-                              ),
+                              onPressed: () =>
+                                  _editSnippet(context, ref, snippet: snippet),
                               icon: const Icon(Icons.edit_outlined),
                             ),
                             IconButton(
                               tooltip: 'Delete snippet',
-                              onPressed: () =>
-                                  ref.read(appRepositoryProvider).deleteSnippet(snippet),
+                              onPressed: () => ref
+                                  .read(appRepositoryProvider)
+                                  .deleteSnippet(snippet),
                               icon: const Icon(Icons.delete_outline),
                             ),
                           ],
@@ -1242,9 +1268,9 @@ class _SnippetsPage extends ConsumerWidget {
     await ref
         .read(workspaceControllerProvider.notifier)
         .runSnippet(snippet.copyWith(shellText: rendered));
-    await ref.read(appRepositoryProvider).saveSnippet(
-          snippet.copyWith(lastUsedAt: DateTime.now()),
-        );
+    await ref
+        .read(appRepositoryProvider)
+        .saveSnippet(snippet.copyWith(lastUsedAt: DateTime.now()));
   }
 
   Future<void> _editSnippet(
@@ -1253,7 +1279,9 @@ class _SnippetsPage extends ConsumerWidget {
     Snippet? snippet,
   }) async {
     final titleController = TextEditingController(text: snippet?.title ?? '');
-    final bodyController = TextEditingController(text: snippet?.shellText ?? '');
+    final bodyController = TextEditingController(
+      text: snippet?.shellText ?? '',
+    );
     final placeholdersController = TextEditingController(
       text: snippet?.placeholders.join(', ') ?? '',
     );
@@ -1262,7 +1290,8 @@ class _SnippetsPage extends ConsumerWidget {
     );
     var favorite = snippet?.isFavorite ?? false;
 
-    final saved = await showDialog<bool>(
+    final saved =
+        await showDialog<bool>(
           context: context,
           builder: (context) => StatefulBuilder(
             builder: (context, setState) => AlertDialog(
@@ -1281,7 +1310,9 @@ class _SnippetsPage extends ConsumerWidget {
                       TextField(
                         controller: bodyController,
                         maxLines: 5,
-                        decoration: const InputDecoration(labelText: 'Shell text'),
+                        decoration: const InputDecoration(
+                          labelText: 'Shell text',
+                        ),
                       ),
                       const SizedBox(height: 12),
                       TextField(
@@ -1327,7 +1358,9 @@ class _SnippetsPage extends ConsumerWidget {
       return;
     }
 
-    await ref.read(appRepositoryProvider).saveSnippet(
+    await ref
+        .read(appRepositoryProvider)
+        .saveSnippet(
           Snippet(
             id: snippet?.id ?? UniqueKey().toString(),
             title: titleController.text.trim(),
@@ -1355,7 +1388,8 @@ class _SnippetsPage extends ConsumerWidget {
         placeholder: TextEditingController(),
     };
 
-    final confirmed = await showDialog<bool>(
+    final confirmed =
+        await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: Text('Fill ${snippet.title}'),
@@ -1393,7 +1427,8 @@ class _SnippetsPage extends ConsumerWidget {
     }
 
     return {
-      for (final entry in controllers.entries) entry.key: entry.value.text.trim(),
+      for (final entry in controllers.entries)
+        entry.key: entry.value.text.trim(),
     };
   }
 }
@@ -1404,6 +1439,8 @@ class _SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final preferences = ref.watch(appPreferencesProvider);
+    final profilesAsync = ref.watch(profilesProvider);
+    final savedKeysAsync = ref.watch(savedKeysProvider);
     final knownHostsAsync = ref.watch(knownHostsProvider);
 
     return Padding(
@@ -1482,6 +1519,150 @@ class _SettingsPage extends ConsumerWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Saved Keys',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  const Text(
+                                    'Create or import reusable SSH keys, then attach them to servers by ID.',
+                                  ),
+                                ],
+                              ),
+                            ),
+                            FilledButton.icon(
+                              onPressed: () => _addSavedKey(context, ref),
+                              icon: const Icon(Icons.add),
+                              label: const Text('Add Key'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        profilesAsync.when(
+                          loading: () => const CircularProgressIndicator(),
+                          error: (error, _) => Text('$error'),
+                          data: (profiles) => savedKeysAsync.when(
+                            loading: () => const CircularProgressIndicator(),
+                            error: (error, _) => Text('$error'),
+                            data: (keys) {
+                              if (keys.isEmpty) {
+                                return const Text(
+                                  'No saved SSH keys yet. Generate or import one here, then select it from a server profile.',
+                                );
+                              }
+                              return Column(
+                                children: [
+                                  for (final key in keys) ...[
+                                    FutureBuilder<String?>(
+                                      future: ref
+                                          .read(secureStorageProvider)
+                                          .readPublicKey(key.id),
+                                      builder: (context, snapshot) {
+                                        final usageCount = profiles
+                                            .where(
+                                              (profile) =>
+                                                  profile.credentialRef?.id ==
+                                                  key.id,
+                                            )
+                                            .length;
+                                        return ListTile(
+                                          contentPadding: EdgeInsets.zero,
+                                          title: Text(key.label),
+                                          subtitle: Text(
+                                            [
+                                              'ID: ${key.id}',
+                                              if (key.publicKeyFingerprint !=
+                                                  null)
+                                                key.publicKeyFingerprint!,
+                                              'Used by $usageCount server${usageCount == 1 ? '' : 's'}',
+                                            ].join('\n'),
+                                          ),
+                                          trailing: Wrap(
+                                            spacing: 8,
+                                            children: [
+                                              IconButton(
+                                                tooltip: 'Copy key ID',
+                                                onPressed: () async {
+                                                  await Clipboard.setData(
+                                                    ClipboardData(text: key.id),
+                                                  );
+                                                  if (context.mounted) {
+                                                    ScaffoldMessenger.of(
+                                                      context,
+                                                    ).showSnackBar(
+                                                      SnackBar(
+                                                        content: Text(
+                                                          'Copied key ID for ${key.label}',
+                                                        ),
+                                                      ),
+                                                    );
+                                                  }
+                                                },
+                                                icon: const Icon(
+                                                  Icons.badge_outlined,
+                                                ),
+                                              ),
+                                              IconButton(
+                                                tooltip: 'Copy public key',
+                                                onPressed: snapshot.data == null
+                                                    ? null
+                                                    : () => _copyPublicKey(
+                                                        context,
+                                                        snapshot.data!,
+                                                        key.label,
+                                                      ),
+                                                icon: const Icon(
+                                                  Icons.content_copy,
+                                                ),
+                                              ),
+                                              IconButton(
+                                                tooltip: 'Delete key',
+                                                onPressed: usageCount > 0
+                                                    ? null
+                                                    : () => _deleteSavedKey(
+                                                        context,
+                                                        ref,
+                                                        key,
+                                                      ),
+                                                icon: const Icon(
+                                                  Icons.delete_outline,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    const Divider(),
+                                  ],
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
                           'Known Hosts',
                           style: Theme.of(context).textTheme.titleMedium,
@@ -1531,14 +1712,96 @@ class _SettingsPage extends ConsumerWidget {
       ),
     );
   }
+
+  Future<void> _addSavedKey(BuildContext context, WidgetRef ref) async {
+    final material = await showModalBottomSheet<SavedKeyMaterial>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) =>
+          SavedKeyEditorSheet(sshKeyService: ref.read(sshKeyServiceProvider)),
+    );
+    if (material == null) {
+      return;
+    }
+
+    await ref.read(appRepositoryProvider).saveCredential(material.credential);
+    await ref
+        .read(secureStorageProvider)
+        .persistCredential(
+          material.credential,
+          primarySecret: material.privateKeyPem,
+          publicKey: material.publicKey,
+          passphrase: material.passphrase,
+        );
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Saved ${material.credential.label} as ${material.credential.id}',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _copyPublicKey(
+    BuildContext context,
+    String publicKey,
+    String label,
+  ) async {
+    await Clipboard.setData(ClipboardData(text: publicKey));
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Copied public key for $label')));
+    }
+  }
+
+  Future<void> _deleteSavedKey(
+    BuildContext context,
+    WidgetRef ref,
+    CredentialRef key,
+  ) async {
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Delete saved key?'),
+            content: Text(
+              'Remove ${key.label} and delete its stored key material?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) {
+      return;
+    }
+
+    await ref.read(appRepositoryProvider).deleteCredentialRef(key.id);
+    await ref.read(secureStorageProvider).deleteCredential(key.id);
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Deleted ${key.label}')));
+    }
+  }
 }
 
 class _PageHeader extends StatelessWidget {
-  const _PageHeader({
-    required this.title,
-    required this.subtitle,
-    this.action,
-  });
+  const _PageHeader({required this.title, required this.subtitle, this.action});
 
   final String title;
   final String subtitle;
@@ -1559,19 +1822,14 @@ class _PageHeader extends StatelessWidget {
             ],
           ),
         ),
-        if (action != null) ...[
-          const SizedBox(width: 12),
-          action!,
-        ],
+        if (action != null) ...[const SizedBox(width: 12), action!],
       ],
     );
   }
 }
 
 class _Badge extends StatelessWidget {
-  const _Badge({
-    required this.label,
-  });
+  const _Badge({required this.label});
 
   final String label;
 
@@ -1591,10 +1849,7 @@ class _Badge extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.title,
-    required this.subtitle,
-  });
+  const _EmptyState({required this.title, required this.subtitle});
 
   final String title;
   final String subtitle;
@@ -1609,10 +1864,7 @@ class _EmptyState extends StatelessWidget {
           children: [
             Text(title, style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 12),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-            ),
+            Text(subtitle, textAlign: TextAlign.center),
           ],
         ),
       ),
@@ -1654,10 +1906,7 @@ class _MaterialHostTrustDelegate implements HostTrustDelegate {
     );
   }
 
-  Future<bool> _confirm({
-    required String title,
-    required String body,
-  }) async {
+  Future<bool> _confirm({required String title, required String body}) async {
     return await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(

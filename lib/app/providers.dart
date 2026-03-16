@@ -8,6 +8,7 @@ import '../features/home_shell.dart';
 import '../services/browser_launcher.dart';
 import '../services/connection_engine.dart';
 import '../services/secure_storage_service.dart';
+import '../services/ssh_key_service.dart';
 import '../services/workspace_controller.dart';
 
 final databaseProvider = Provider<AppDatabase>((ref) {
@@ -26,6 +27,10 @@ final biometricServiceProvider = Provider<BiometricService>((ref) {
 
 final browserLauncherProvider = Provider<BrowserLauncher>((ref) {
   return const BrowserLauncher();
+});
+
+final sshKeyServiceProvider = Provider<SshKeyService>((ref) {
+  return const SshKeyService();
 });
 
 final appRepositoryProvider = Provider<AppRepository>((ref) {
@@ -55,6 +60,10 @@ final snippetsProvider = StreamProvider<List<Snippet>>((ref) {
   return ref.watch(appRepositoryProvider).watchSnippets();
 });
 
+final savedKeysProvider = StreamProvider<List<CredentialRef>>((ref) {
+  return ref.watch(appRepositoryProvider).watchSavedKeys();
+});
+
 final knownHostsProvider = StreamProvider<List<KnownHostEntry>>((ref) {
   return ref.watch(appRepositoryProvider).watchKnownHosts();
 });
@@ -68,10 +77,7 @@ class AppPreferencesState {
   final ThemeMode themeMode;
   final bool splitSessions;
 
-  AppPreferencesState copyWith({
-    ThemeMode? themeMode,
-    bool? splitSessions,
-  }) {
+  AppPreferencesState copyWith({ThemeMode? themeMode, bool? splitSessions}) {
     return AppPreferencesState(
       themeMode: themeMode ?? this.themeMode,
       splitSessions: splitSessions ?? this.splitSessions,
@@ -106,16 +112,12 @@ final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     initialLocation: '/servers',
     routes: [
-      GoRoute(
-        path: '/',
-        redirect: (context, state) => '/servers',
-      ),
+      GoRoute(path: '/', redirect: (context, state) => '/servers'),
       for (final section in AppSection.values)
         GoRoute(
           path: section.path,
-          pageBuilder: (context, state) => NoTransitionPage<void>(
-            child: HomeShell(section: section),
-          ),
+          pageBuilder: (context, state) =>
+              NoTransitionPage<void>(child: HomeShell(section: section)),
         ),
     ],
   );

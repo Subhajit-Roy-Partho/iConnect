@@ -25,30 +25,31 @@ void main() {
       host: 'bastion.internal',
       username: 'ops',
     );
-    final target = _profile(
-      id: 'target',
-      label: 'Target',
-      host: 'db.internal',
-      username: 'ubuntu',
-    ).copyWith(
-      jumpRoute: const JumpRoute(
-        profileId: 'target',
-        hopProfileIds: ['bastion'],
-      ),
-      portForwards: const [
-        PortForwardProfile(
-          id: 'pf-1',
-          profileId: 'target',
-          kind: PortForwardKind.local,
-          bindHost: '127.0.0.1',
-          bindPort: 15432,
-          targetHost: 'localhost',
-          targetPort: 5432,
-          autoStart: true,
-          label: 'Postgres',
-        ),
-      ],
-    );
+    final target =
+        _profile(
+          id: 'target',
+          label: 'Target',
+          host: 'db.internal',
+          username: 'ubuntu',
+        ).copyWith(
+          jumpRoute: const JumpRoute(
+            profileId: 'target',
+            hopProfileIds: ['bastion'],
+          ),
+          portForwards: const [
+            PortForwardProfile(
+              id: 'pf-1',
+              profileId: 'target',
+              kind: PortForwardKind.local,
+              bindHost: '127.0.0.1',
+              bindPort: 15432,
+              targetHost: 'localhost',
+              targetPort: 5432,
+              autoStart: true,
+              label: 'Postgres',
+            ),
+          ],
+        );
 
     await repository.saveProfile(bastion);
     await repository.saveProfile(target);
@@ -86,25 +87,58 @@ void main() {
     expect(ordered.map((profile) => profile.id), ['jump-b', 'jump-a']);
   });
 
-  test('replaces known host fingerprints for the same host and key type', () async {
+  test(
+    'replaces known host fingerprints for the same host and key type',
+    () async {
+      await repository.initialize();
+
+      await repository.saveKnownHost(
+        host: 'bastion.internal',
+        port: 22,
+        keyType: 'ssh-ed25519',
+        fingerprint: 'aa:bb:cc',
+      );
+      await repository.saveKnownHost(
+        host: 'bastion.internal',
+        port: 22,
+        keyType: 'ssh-ed25519',
+        fingerprint: '11:22:33',
+      );
+
+      final entries = await repository.getKnownHosts();
+      expect(entries, hasLength(1));
+      expect(entries.first.fingerprintHex, '11:22:33');
+    },
+  );
+
+  test('keeps saved private keys when deleting a server profile', () async {
     await repository.initialize();
 
-    await repository.saveKnownHost(
-      host: 'bastion.internal',
-      port: 22,
-      keyType: 'ssh-ed25519',
-      fingerprint: 'aa:bb:cc',
+    const key = CredentialRef(
+      id: 'key-1',
+      label: 'Primary Key',
+      kind: CredentialKind.privateKey,
+      publicKeyFingerprint: 'SHA256:test',
     );
-    await repository.saveKnownHost(
-      host: 'bastion.internal',
-      port: 22,
-      keyType: 'ssh-ed25519',
-      fingerprint: '11:22:33',
-    );
+    await repository.saveCredential(key);
 
-    final entries = await repository.getKnownHosts();
-    expect(entries, hasLength(1));
-    expect(entries.first.fingerprintHex, '11:22:33');
+    final profile = _profile(
+      id: 'target',
+      label: 'Target',
+      host: 'target.internal',
+      username: 'ops',
+    ).copyWith(authMethod: AuthMethod.privateKey, credentialRef: key);
+
+    await repository.saveProfile(profile);
+    await repository.deleteProfile(profile);
+
+    final keys = await repository.getCredentials(
+      kind: CredentialKind.privateKey,
+    );
+    final profiles = await repository.getProfiles();
+
+    expect(profiles, isEmpty);
+    expect(keys.map((entry) => entry.id), contains('key-1'));
   });
 }
 

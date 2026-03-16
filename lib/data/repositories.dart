@@ -7,11 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import 'app_database.dart';
 
-enum AuthMethod {
-  password,
-  privateKey,
-  keyboardInteractive,
-}
+enum AuthMethod { password, privateKey, keyboardInteractive }
 
 enum NetworkMode {
   direct,
@@ -21,22 +17,11 @@ enum NetworkMode {
   cloudflareBrowser,
 }
 
-enum CredentialKind {
-  password,
-  privateKey,
-  passphrase,
-}
+enum CredentialKind { password, privateKey, passphrase }
 
-enum PortForwardKind {
-  local,
-  remote,
-}
+enum PortForwardKind { local, remote }
 
-enum TerminalThemePreset {
-  midnight,
-  glacier,
-  daybreak,
-}
+enum TerminalThemePreset { midnight, glacier, daybreak }
 
 enum PreflightRequirement {
   warpClient,
@@ -57,7 +42,9 @@ T enumByName<T extends Enum>(Iterable<T> values, String value, T fallback) {
 }
 
 String fingerprintHex(Uint8List bytes) {
-  return bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join(':');
+  return bytes
+      .map((value) => value.toRadixString(16).padLeft(2, '0'))
+      .join(':');
 }
 
 class CredentialRef {
@@ -130,18 +117,12 @@ class ManagedAccessConfig {
 }
 
 class JumpRoute {
-  const JumpRoute({
-    required this.profileId,
-    required this.hopProfileIds,
-  });
+  const JumpRoute({required this.profileId, required this.hopProfileIds});
 
   final String profileId;
   final List<String> hopProfileIds;
 
-  JumpRoute copyWith({
-    String? profileId,
-    List<String>? hopProfileIds,
-  }) {
+  JumpRoute copyWith({String? profileId, List<String>? hopProfileIds}) {
     return JumpRoute(
       profileId: profileId ?? this.profileId,
       hopProfileIds: hopProfileIds ?? this.hopProfileIds,
@@ -330,16 +311,15 @@ class ServerProfile {
 }
 
 class AppRepository {
-  AppRepository(
-    this.db, {
-    this.seedDemoContent = true,
-  });
+  AppRepository(this.db, {this.seedDemoContent = true});
 
   final AppDatabase db;
   final bool seedDemoContent;
 
   final _profilesController = StreamController<List<ServerProfile>>.broadcast();
   final _snippetsController = StreamController<List<Snippet>>.broadcast();
+  final _credentialsController =
+      StreamController<List<CredentialRef>>.broadcast();
   final _knownHostsController =
       StreamController<List<KnownHostEntry>>.broadcast();
 
@@ -368,6 +348,16 @@ class AppRepository {
     yield* _snippetsController.stream;
   }
 
+  Stream<List<CredentialRef>> watchSavedKeys() async* {
+    await initialize();
+    yield await getCredentials(kind: CredentialKind.privateKey);
+    yield* _credentialsController.stream.map(
+      (entries) => entries
+          .where((entry) => entry.kind == CredentialKind.privateKey)
+          .toList(growable: false),
+    );
+  }
+
   Stream<List<KnownHostEntry>> watchKnownHosts() async* {
     await initialize();
     yield await getKnownHosts();
@@ -375,76 +365,81 @@ class AppRepository {
   }
 
   Future<List<ServerProfile>> getProfiles() async {
-    final profileRows = await (db.select(db.serverProfiles)
-          ..orderBy([(tbl) => OrderingTerm.asc(tbl.label)]))
-        .get();
+    final profileRows = await (db.select(
+      db.serverProfiles,
+    )..orderBy([(tbl) => OrderingTerm.asc(tbl.label)])).get();
     final credentialRows = await db.select(db.credentialRefs).get();
-    final jumpRows = await (db.select(db.jumpHops)
-          ..orderBy([(tbl) => OrderingTerm.asc(tbl.hopOrder)]))
-        .get();
+    final jumpRows = await (db.select(
+      db.jumpHops,
+    )..orderBy([(tbl) => OrderingTerm.asc(tbl.hopOrder)])).get();
     final portForwardRows = await db.select(db.portForwardProfiles).get();
 
     final credentialsById = {
       for (final row in credentialRows) row.id: _mapCredential(row),
     };
-    final jumpsByProfile = groupBy(jumpRows, (JumpHopRecord row) => row.profileId);
+    final jumpsByProfile = groupBy(
+      jumpRows,
+      (JumpHopRecord row) => row.profileId,
+    );
     final forwardsByProfile = groupBy(
       portForwardRows,
       (PortForwardProfileRecord row) => row.profileId,
     );
 
-    return profileRows.map((row) {
-      final managedAccessConfig = ManagedAccessConfig(
-        mode: enumByName(
-          NetworkMode.values,
-          row.networkMode,
-          NetworkMode.direct,
-        ),
-        browserUrl: row.managedBrowserUrl,
-        targetHint: row.managedTargetHint,
-        preflightRequirements: _decodePreflightRequirements(
-          row.preflightRequirementsJson,
-        ),
-      );
+    return profileRows
+        .map((row) {
+          final managedAccessConfig = ManagedAccessConfig(
+            mode: enumByName(
+              NetworkMode.values,
+              row.networkMode,
+              NetworkMode.direct,
+            ),
+            browserUrl: row.managedBrowserUrl,
+            targetHint: row.managedTargetHint,
+            preflightRequirements: _decodePreflightRequirements(
+              row.preflightRequirementsJson,
+            ),
+          );
 
-      return ServerProfile(
-        id: row.id,
-        label: row.label,
-        host: row.host,
-        port: row.port,
-        username: row.username,
-        tags: _decodeStringList(row.tagsJson),
-        defaultDirectory: row.defaultDirectory,
-        terminalTheme: enumByName(
-          TerminalThemePreset.values,
-          row.terminalTheme,
-          TerminalThemePreset.midnight,
-        ),
-        authMethod: enumByName(
-          AuthMethod.values,
-          row.authMethod,
-          AuthMethod.privateKey,
-        ),
-        credentialRef: row.credentialRefId == null
-            ? null
-            : credentialsById[row.credentialRefId],
-        networkMode: enumByName(
-          NetworkMode.values,
-          row.networkMode,
-          NetworkMode.direct,
-        ),
-        managedAccessConfig: managedAccessConfig,
-        jumpRoute: JumpRoute(
-          profileId: row.id,
-          hopProfileIds: (jumpsByProfile[row.id] ?? const [])
-              .map((hop) => hop.hopProfileId)
-              .toList(growable: false),
-        ),
-        portForwards: (forwardsByProfile[row.id] ?? const [])
-            .map(_mapForward)
-            .toList(growable: false),
-      );
-    }).toList(growable: false);
+          return ServerProfile(
+            id: row.id,
+            label: row.label,
+            host: row.host,
+            port: row.port,
+            username: row.username,
+            tags: _decodeStringList(row.tagsJson),
+            defaultDirectory: row.defaultDirectory,
+            terminalTheme: enumByName(
+              TerminalThemePreset.values,
+              row.terminalTheme,
+              TerminalThemePreset.midnight,
+            ),
+            authMethod: enumByName(
+              AuthMethod.values,
+              row.authMethod,
+              AuthMethod.privateKey,
+            ),
+            credentialRef: row.credentialRefId == null
+                ? null
+                : credentialsById[row.credentialRefId],
+            networkMode: enumByName(
+              NetworkMode.values,
+              row.networkMode,
+              NetworkMode.direct,
+            ),
+            managedAccessConfig: managedAccessConfig,
+            jumpRoute: JumpRoute(
+              profileId: row.id,
+              hopProfileIds: (jumpsByProfile[row.id] ?? const [])
+                  .map((hop) => hop.hopProfileId)
+                  .toList(growable: false),
+            ),
+            portForwards: (forwardsByProfile[row.id] ?? const [])
+                .map(_mapForward)
+                .toList(growable: false),
+          );
+        })
+        .toList(growable: false);
   }
 
   Future<Map<String, ServerProfile>> getProfileMap() async {
@@ -460,26 +455,81 @@ class AppRepository {
         .toList(growable: false);
   }
 
+  Future<List<CredentialRef>> getCredentials({CredentialKind? kind}) async {
+    await initialize();
+    final query = db.select(db.credentialRefs)
+      ..orderBy([(tbl) => OrderingTerm.asc(tbl.label)]);
+    if (kind != null) {
+      query.where((tbl) => tbl.kind.equals(kind.storageKey));
+    }
+    final rows = await query.get();
+    return rows.map(_mapCredential).toList(growable: false);
+  }
+
+  Future<CredentialRef?> getCredentialById(String id) async {
+    await initialize();
+    final row = await (db.select(
+      db.credentialRefs,
+    )..where((tbl) => tbl.id.equals(id))).getSingleOrNull();
+    return row == null ? null : _mapCredential(row);
+  }
+
+  Future<void> saveCredential(CredentialRef credential) async {
+    await initialize();
+    await db
+        .into(db.credentialRefs)
+        .insertOnConflictUpdate(
+          CredentialRefsCompanion.insert(
+            id: credential.id,
+            label: credential.label,
+            kind: credential.kind.storageKey,
+            usernameHint: Value(credential.usernameHint),
+            requiresBiometric: Value(credential.requiresBiometric),
+            publicKeyFingerprint: Value(credential.publicKeyFingerprint),
+            isEncrypted: Value(credential.isEncrypted),
+            createdAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+    await _emitCredentials();
+    await _emitProfiles();
+  }
+
+  Future<void> deleteCredentialRef(String id) async {
+    await initialize();
+    await (db.delete(
+      db.credentialRefs,
+    )..where((tbl) => tbl.id.equals(id))).go();
+    await _emitCredentials();
+    await _emitProfiles();
+  }
+
   Future<void> saveProfile(ServerProfile profile) async {
     await initialize();
     await db.transaction(() async {
       if (profile.credentialRef != null) {
-        await db.into(db.credentialRefs).insertOnConflictUpdate(
+        await db
+            .into(db.credentialRefs)
+            .insertOnConflictUpdate(
               CredentialRefsCompanion.insert(
                 id: profile.credentialRef!.id,
                 label: profile.credentialRef!.label,
                 kind: profile.credentialRef!.kind.storageKey,
                 usernameHint: Value(profile.credentialRef!.usernameHint),
-                requiresBiometric: Value(profile.credentialRef!.requiresBiometric),
-                publicKeyFingerprint:
-                    Value(profile.credentialRef!.publicKeyFingerprint),
+                requiresBiometric: Value(
+                  profile.credentialRef!.requiresBiometric,
+                ),
+                publicKeyFingerprint: Value(
+                  profile.credentialRef!.publicKeyFingerprint,
+                ),
                 isEncrypted: Value(profile.credentialRef!.isEncrypted),
                 createdAt: DateTime.now().millisecondsSinceEpoch,
               ),
             );
       }
 
-      await db.into(db.serverProfiles).insertOnConflictUpdate(
+      await db
+          .into(db.serverProfiles)
+          .insertOnConflictUpdate(
             ServerProfilesCompanion.insert(
               id: profile.id,
               label: profile.label,
@@ -490,9 +540,11 @@ class AppRepository {
               terminalTheme: profile.terminalTheme.storageKey,
               authMethod: profile.authMethod.storageKey,
               networkMode: profile.networkMode.storageKey,
-              preflightRequirementsJson: Value(_encodePreflightRequirements(
-                profile.managedAccessConfig.preflightRequirements,
-              )),
+              preflightRequirementsJson: Value(
+                _encodePreflightRequirements(
+                  profile.managedAccessConfig.preflightRequirements,
+                ),
+              ),
               createdAt: DateTime.now().millisecondsSinceEpoch,
               defaultDirectory: Value(profile.defaultDirectory),
               credentialRefId: Value(profile.credentialRef?.id),
@@ -502,10 +554,13 @@ class AppRepository {
             ),
           );
 
-      await (db.delete(db.jumpHops)..where((tbl) => tbl.profileId.equals(profile.id)))
-          .go();
+      await (db.delete(
+        db.jumpHops,
+      )..where((tbl) => tbl.profileId.equals(profile.id))).go();
       for (final entry in profile.jumpRoute.hopProfileIds.indexed) {
-        await db.into(db.jumpHops).insert(
+        await db
+            .into(db.jumpHops)
+            .insert(
               JumpHopsCompanion.insert(
                 id: const Uuid().v4(),
                 profileId: profile.id,
@@ -515,11 +570,13 @@ class AppRepository {
             );
       }
 
-      await (db.delete(db.portForwardProfiles)
-            ..where((tbl) => tbl.profileId.equals(profile.id)))
-          .go();
+      await (db.delete(
+        db.portForwardProfiles,
+      )..where((tbl) => tbl.profileId.equals(profile.id))).go();
       for (final forward in profile.portForwards) {
-        await db.into(db.portForwardProfiles).insert(
+        await db
+            .into(db.portForwardProfiles)
+            .insert(
               PortForwardProfilesCompanion.insert(
                 id: forward.id,
                 profileId: profile.id,
@@ -534,36 +591,32 @@ class AppRepository {
             );
       }
     });
-    await _emitProfiles();
+    await Future.wait([_emitProfiles(), _emitCredentials()]);
   }
 
   Future<void> deleteProfile(ServerProfile profile) async {
     await initialize();
     await db.transaction(() async {
-      await (db.delete(db.jumpHops)
-            ..where((tbl) => tbl.profileId.equals(profile.id)))
-          .go();
-      await (db.delete(db.portForwardProfiles)
-            ..where((tbl) => tbl.profileId.equals(profile.id)))
-          .go();
-      await (db.delete(db.serverProfiles)..where((tbl) => tbl.id.equals(profile.id)))
-          .go();
-      if (profile.credentialRef != null) {
-        await (db.delete(db.credentialRefs)
-              ..where((tbl) => tbl.id.equals(profile.credentialRef!.id)))
-            .go();
-      }
+      await (db.delete(
+        db.jumpHops,
+      )..where((tbl) => tbl.profileId.equals(profile.id))).go();
+      await (db.delete(
+        db.portForwardProfiles,
+      )..where((tbl) => tbl.profileId.equals(profile.id))).go();
+      await (db.delete(
+        db.serverProfiles,
+      )..where((tbl) => tbl.id.equals(profile.id))).go();
     });
     await _emitProfiles();
   }
 
   Future<List<Snippet>> getSnippets() async {
-    final rows = await (db.select(db.snippets)
-          ..orderBy([
-            (tbl) => OrderingTerm.desc(tbl.isFavorite),
-            (tbl) => OrderingTerm.asc(tbl.title),
-          ]))
-        .get();
+    final rows =
+        await (db.select(db.snippets)..orderBy([
+              (tbl) => OrderingTerm.desc(tbl.isFavorite),
+              (tbl) => OrderingTerm.asc(tbl.title),
+            ]))
+            .get();
 
     return rows
         .map(
@@ -584,7 +637,9 @@ class AppRepository {
 
   Future<void> saveSnippet(Snippet snippet) async {
     await initialize();
-    await db.into(db.snippets).insertOnConflictUpdate(
+    await db
+        .into(db.snippets)
+        .insertOnConflictUpdate(
           SnippetsCompanion.insert(
             id: snippet.id,
             title: snippet.title,
@@ -601,14 +656,16 @@ class AppRepository {
 
   Future<void> deleteSnippet(Snippet snippet) async {
     await initialize();
-    await (db.delete(db.snippets)..where((tbl) => tbl.id.equals(snippet.id))).go();
+    await (db.delete(
+      db.snippets,
+    )..where((tbl) => tbl.id.equals(snippet.id))).go();
     await _emitSnippets();
   }
 
   Future<List<KnownHostEntry>> getKnownHosts() async {
-    final rows = await (db.select(db.knownHosts)
-          ..orderBy([(tbl) => OrderingTerm.asc(tbl.host)]))
-        .get();
+    final rows = await (db.select(
+      db.knownHosts,
+    )..orderBy([(tbl) => OrderingTerm.asc(tbl.host)])).get();
     return rows
         .map(
           (row) => KnownHostEntry(
@@ -630,12 +687,14 @@ class AppRepository {
     String keyType,
   ) async {
     await initialize();
-    final row = await (db.select(db.knownHosts)
-          ..where((tbl) =>
-              tbl.host.equals(host) &
-              tbl.port.equals(port) &
-              tbl.keyType.equals(keyType)))
-        .getSingleOrNull();
+    final row =
+        await (db.select(db.knownHosts)..where(
+              (tbl) =>
+                  tbl.host.equals(host) &
+                  tbl.port.equals(port) &
+                  tbl.keyType.equals(keyType),
+            ))
+            .getSingleOrNull();
     if (row == null) {
       return null;
     }
@@ -658,7 +717,9 @@ class AppRepository {
   }) async {
     await initialize();
     final existing = await findKnownHost(host, port, keyType);
-    await db.into(db.knownHosts).insertOnConflictUpdate(
+    await db
+        .into(db.knownHosts)
+        .insertOnConflictUpdate(
           KnownHostsCompanion.insert(
             id: existing?.id ?? const Uuid().v4(),
             host: host,
@@ -667,7 +728,7 @@ class AppRepository {
             fingerprintHex: fingerprint,
             createdAt:
                 existing?.createdAt.millisecondsSinceEpoch ??
-                    DateTime.now().millisecondsSinceEpoch,
+                DateTime.now().millisecondsSinceEpoch,
             updatedAt: DateTime.now().millisecondsSinceEpoch,
           ),
         );
@@ -676,7 +737,9 @@ class AppRepository {
 
   Future<void> deleteKnownHost(KnownHostEntry entry) async {
     await initialize();
-    await (db.delete(db.knownHosts)..where((tbl) => tbl.id.equals(entry.id))).go();
+    await (db.delete(
+      db.knownHosts,
+    )..where((tbl) => tbl.id.equals(entry.id))).go();
     await _emitKnownHosts();
   }
 
@@ -743,10 +806,7 @@ class AppRepository {
             PreflightRequirement.knownHostReview,
           ],
         ),
-        jumpRoute: JumpRoute(
-          profileId: fleetId,
-          hopProfileIds: [bastionId],
-        ),
+        jumpRoute: JumpRoute(profileId: fleetId, hopProfileIds: [bastionId]),
         portForwards: const [],
       ),
     );
@@ -797,6 +857,7 @@ class AppRepository {
   Future<void> dispose() async {
     await _profilesController.close();
     await _snippetsController.close();
+    await _credentialsController.close();
     await _knownHostsController.close();
   }
 
@@ -804,6 +865,7 @@ class AppRepository {
     await Future.wait([
       _emitProfiles(),
       _emitSnippets(),
+      _emitCredentials(),
       _emitKnownHosts(),
     ]);
   }
@@ -814,6 +876,10 @@ class AppRepository {
 
   Future<void> _emitSnippets() async {
     _snippetsController.add(await getSnippets());
+  }
+
+  Future<void> _emitCredentials() async {
+    _credentialsController.add(await getCredentials());
   }
 
   Future<void> _emitKnownHosts() async {
@@ -840,11 +906,7 @@ class AppRepository {
     return PortForwardProfile(
       id: row.id,
       profileId: row.profileId,
-      kind: enumByName(
-        PortForwardKind.values,
-        row.kind,
-        PortForwardKind.local,
-      ),
+      kind: enumByName(PortForwardKind.values, row.kind, PortForwardKind.local),
       bindHost: row.bindHost,
       bindPort: row.bindPort,
       targetHost: row.targetHost,

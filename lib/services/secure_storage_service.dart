@@ -10,16 +10,21 @@ class SecureStorageService {
   static const _storage = FlutterSecureStorage();
 
   String _primaryKey(String credentialId) => 'credential:$credentialId:primary';
+  String _publicKey(String credentialId) => 'credential:$credentialId:public';
   String _passphraseKey(String credentialId) =>
       'credential:$credentialId:passphrase';
 
   Future<void> persistCredential(
     CredentialRef ref, {
     String? primarySecret,
+    String? publicKey,
     String? passphrase,
   }) async {
     if (primarySecret != null) {
       await _storage.write(key: _primaryKey(ref.id), value: primarySecret);
+    }
+    if (publicKey != null) {
+      await _storage.write(key: _publicKey(ref.id), value: publicKey);
     }
     if (passphrase != null) {
       await _storage.write(key: _passphraseKey(ref.id), value: passphrase);
@@ -34,8 +39,13 @@ class SecureStorageService {
     return _storage.read(key: _passphraseKey(credentialId));
   }
 
+  Future<String?> readPublicKey(String credentialId) {
+    return _storage.read(key: _publicKey(credentialId));
+  }
+
   Future<void> deleteCredential(String credentialId) async {
     await _storage.delete(key: _primaryKey(credentialId));
+    await _storage.delete(key: _publicKey(credentialId));
     await _storage.delete(key: _passphraseKey(credentialId));
   }
 }
@@ -50,7 +60,8 @@ class BiometricService {
 
     try {
       final auth = LocalAuthentication();
-      final canCheck = await auth.canCheckBiometrics || await auth.isDeviceSupported();
+      final canCheck =
+          await auth.canCheckBiometrics || await auth.isDeviceSupported();
       if (!canCheck) {
         return false;
       }

@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   collection: ^1.19.1
+  crypto: ^3.0.7
   dartssh2: ^2.13.0
   drift: ^2.29.0
   file_picker: ^10.3.2
@@ -19,6 +20,7 @@ dependencies:
   local_auth: ^2.3.0
   path: ^1.9.1
   path_provider: ^2.1.5
+  pinenacl: ^0.6.0
   sqlite3_flutter_libs: ^0.5.39
   url_launcher: ^6.3.2
   uuid: ^4.5.1

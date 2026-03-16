@@ -3,17 +3,21 @@ import 'package:uuid/uuid.dart';
 
 import '../core/server_profile_validator.dart';
 import '../data/repositories.dart';
+import '../services/ssh_key_service.dart';
+import 'saved_key_editor_sheet.dart';
 
 class ServerEditorResult {
   const ServerEditorResult({
     required this.profile,
     this.primarySecret,
     this.passphrase,
+    this.savedKeys = const [],
   });
 
   final ServerProfile profile;
   final String? primarySecret;
   final String? passphrase;
+  final List<SavedKeyMaterial> savedKeys;
 }
 
 class ServerEditorSheet extends StatefulWidget {
@@ -21,10 +25,14 @@ class ServerEditorSheet extends StatefulWidget {
     super.key,
     this.initialProfile,
     required this.availableProfiles,
+    required this.availableKeys,
+    required this.sshKeyService,
   });
 
   final ServerProfile? initialProfile;
   final List<ServerProfile> availableProfiles;
+  final List<CredentialRef> availableKeys;
+  final SshKeyService sshKeyService;
 
   @override
   State<ServerEditorSheet> createState() => _ServerEditorSheetState();
@@ -41,7 +49,6 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
   late final TextEditingController _defaultDirectoryController;
   late final TextEditingController _credentialLabelController;
   late final TextEditingController _secretController;
-  late final TextEditingController _passphraseController;
   late final TextEditingController _browserUrlController;
   late final TextEditingController _targetHintController;
 
@@ -51,8 +58,11 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
   late bool _requiresBiometric;
   late final List<String> _selectedHopIds;
   late final List<_PortForwardDraft> _forwardDrafts;
+  late final List<CredentialRef> _availableKeys;
+  final List<SavedKeyMaterial> _createdKeys = [];
 
   String? _pendingHopId;
+  String? _selectedKeyId;
 
   @override
   void initState() {
@@ -74,7 +84,6 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
       text: initial?.credentialRef?.label ?? '',
     );
     _secretController = TextEditingController();
-    _passphraseController = TextEditingController();
     _browserUrlController = TextEditingController(
       text: initial?.managedAccessConfig.browserUrl ?? '',
     );
@@ -89,6 +98,10 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
     _forwardDrafts = (initial?.portForwards ?? const [])
         .map(_PortForwardDraft.fromProfile)
         .toList();
+    _availableKeys = [...widget.availableKeys];
+    _selectedKeyId = initial?.authMethod == AuthMethod.privateKey
+        ? initial?.credentialRef?.id
+        : null;
   }
 
   @override
@@ -101,7 +114,6 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
     _defaultDirectoryController.dispose();
     _credentialLabelController.dispose();
     _secretController.dispose();
-    _passphraseController.dispose();
     _browserUrlController.dispose();
     _targetHintController.dispose();
     for (final draft in _forwardDrafts) {
@@ -146,7 +158,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                   children: [
                     TextField(
                       controller: _labelController,
-                      decoration: const InputDecoration(labelText: 'Display name'),
+                      decoration: const InputDecoration(
+                        labelText: 'Display name',
+                      ),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -155,7 +169,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                           flex: 3,
                           child: TextField(
                             controller: _hostController,
-                            decoration: const InputDecoration(labelText: 'Host'),
+                            decoration: const InputDecoration(
+                              labelText: 'Host',
+                            ),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -163,7 +179,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                           child: TextField(
                             controller: _portController,
                             keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(labelText: 'Port'),
+                            decoration: const InputDecoration(
+                              labelText: 'Port',
+                            ),
                           ),
                         ),
                       ],
@@ -199,7 +217,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                   children: [
                     DropdownButtonFormField<AuthMethod>(
                       initialValue: _authMethod,
-                      decoration: const InputDecoration(labelText: 'Auth method'),
+                      decoration: const InputDecoration(
+                        labelText: 'Auth method',
+                      ),
                       items: AuthMethod.values
                           .map(
                             (method) => DropdownMenuItem(
@@ -218,7 +238,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                     const SizedBox(height: 12),
                     DropdownButtonFormField<NetworkMode>(
                       initialValue: _networkMode,
-                      decoration: const InputDecoration(labelText: 'Network mode'),
+                      decoration: const InputDecoration(
+                        labelText: 'Network mode',
+                      ),
                       items: NetworkMode.values
                           .map(
                             (mode) => DropdownMenuItem(
@@ -237,7 +259,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                     const SizedBox(height: 12),
                     DropdownButtonFormField<TerminalThemePreset>(
                       initialValue: _themePreset,
-                      decoration: const InputDecoration(labelText: 'Terminal theme'),
+                      decoration: const InputDecoration(
+                        labelText: 'Terminal theme',
+                      ),
                       items: TerminalThemePreset.values
                           .map(
                             (preset) => DropdownMenuItem(
@@ -254,49 +278,98 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                       },
                     ),
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: _credentialLabelController,
-                      decoration: const InputDecoration(
-                        labelText: 'Credential label',
-                        hintText: 'Work key or Prod password',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _secretController,
-                      maxLines: _authMethod == AuthMethod.privateKey ? 8 : 1,
-                      obscureText: _authMethod != AuthMethod.privateKey,
-                      decoration: InputDecoration(
-                        labelText: switch (_authMethod) {
-                          AuthMethod.password => 'Password',
-                          AuthMethod.privateKey => 'Private key (PEM)',
-                          AuthMethod.keyboardInteractive =>
-                            'Default interactive response',
+                    if (_authMethod == AuthMethod.privateKey) ...[
+                      DropdownButtonFormField<String>(
+                        initialValue: _selectedKeyId,
+                        decoration: const InputDecoration(
+                          labelText: 'Saved key',
+                        ),
+                        items: _availableKeys
+                            .map(
+                              (key) => DropdownMenuItem(
+                                value: key.id,
+                                child: Text(
+                                  '${key.label} (${key.id.substring(0, 8)})',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) {
+                          setState(() {
+                            _selectedKeyId = value;
+                            final selected = _selectedKey;
+                            _requiresBiometric =
+                                selected?.requiresBiometric ??
+                                _requiresBiometric;
+                          });
                         },
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _passphraseController,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Passphrase (optional)',
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          _selectedKey == null
+                              ? 'Pick a saved key, or create one now and reuse it by ID across servers.'
+                              : 'Selected key ID: ${_selectedKey!.id}',
+                          style: theme.textTheme.bodySmall,
+                        ),
                       ),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _requiresBiometric,
-                      title: const Text('Require biometric unlock'),
-                      onChanged: (value) {
-                        setState(() => _requiresBiometric = value);
-                      },
-                    ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          FilledButton.tonalIcon(
+                            onPressed: _createOrImportKey,
+                            icon: const Icon(Icons.key_outlined),
+                            label: const Text('Create or Import Key'),
+                          ),
+                          const SizedBox(width: 12),
+                          if (_selectedKey != null)
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                setState(() => _selectedKeyId = null);
+                              },
+                              icon: const Icon(Icons.clear),
+                              label: const Text('Clear'),
+                            ),
+                        ],
+                      ),
+                    ] else ...[
+                      TextField(
+                        controller: _credentialLabelController,
+                        decoration: const InputDecoration(
+                          labelText: 'Credential label',
+                          hintText: 'Prod password or OTP fallback',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _secretController,
+                        obscureText: true,
+                        decoration: InputDecoration(
+                          labelText: switch (_authMethod) {
+                            AuthMethod.password => 'Password',
+                            AuthMethod.privateKey => 'Private key (PEM)',
+                            AuthMethod.keyboardInteractive =>
+                              'Default interactive response',
+                          },
+                        ),
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: _requiresBiometric,
+                        title: const Text('Require biometric unlock'),
+                        onChanged: (value) {
+                          setState(() => _requiresBiometric = value);
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     TextField(
                       controller: _browserUrlController,
                       decoration: const InputDecoration(
                         labelText: 'Browser fallback URL',
-                        hintText: 'Required for Cloudflare/Tailscale browser flows',
+                        hintText:
+                            'Required for Cloudflare/Tailscale browser flows',
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -324,8 +397,10 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                             (hopId) => InputChip(
                               label: Text(
                                 widget.availableProfiles
-                                        .firstWhere((profile) => profile.id == hopId)
-                                        .label,
+                                    .firstWhere(
+                                      (profile) => profile.id == hopId,
+                                    )
+                                    .label,
                               ),
                               onDeleted: () {
                                 setState(() => _selectedHopIds.remove(hopId));
@@ -341,7 +416,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                         labelText: 'Add jump profile',
                       ),
                       items: jumpCandidates
-                          .where((profile) => !_selectedHopIds.contains(profile.id))
+                          .where(
+                            (profile) => !_selectedHopIds.contains(profile.id),
+                          )
                           .map(
                             (profile) => DropdownMenuItem(
                               value: profile.id,
@@ -383,7 +460,9 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                       alignment: Alignment.centerLeft,
                       child: OutlinedButton.icon(
                         onPressed: () {
-                          setState(() => _forwardDrafts.add(_PortForwardDraft.empty()));
+                          setState(
+                            () => _forwardDrafts.add(_PortForwardDraft.empty()),
+                          );
                         },
                         icon: const Icon(Icons.add),
                         label: const Text('Add forward'),
@@ -400,10 +479,7 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
                     child: const Text('Cancel'),
                   ),
                   const Spacer(),
-                  FilledButton(
-                    onPressed: _save,
-                    child: const Text('Save'),
-                  ),
+                  FilledButton(onPressed: _save, child: const Text('Save')),
                 ],
               ),
             ],
@@ -428,62 +504,46 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
       browserUrl: _browserUrlController.text.trim(),
     );
     if (issues.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(issues.first)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(issues.first)));
       return;
     }
 
     final initial = widget.initialProfile;
     final initialCredential = initial?.credentialRef;
-    final credentialKind = switch (_authMethod) {
-      AuthMethod.password => CredentialKind.password,
-      AuthMethod.privateKey => CredentialKind.privateKey,
-      AuthMethod.keyboardInteractive => CredentialKind.password,
+    final nativeCredentialIssue = _validateCredentialChoice(initialCredential);
+    if (nativeCredentialIssue != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(nativeCredentialIssue)));
+      return;
+    }
+
+    final credentialRef = switch (_authMethod) {
+      AuthMethod.privateKey => _selectedKey,
+      AuthMethod.password || AuthMethod.keyboardInteractive =>
+        _passwordCredentialFor(initialCredential, label),
     };
-
-    final hasCredentialContent = _credentialLabelController.text.trim().isNotEmpty ||
-        _secretController.text.trim().isNotEmpty ||
-        initialCredential != null;
-
-    final credentialRef = hasCredentialContent
-        ? (initialCredential?.copyWith(
-              label: _credentialLabelController.text.trim().isEmpty
-                  ? initialCredential.label
-                  : _credentialLabelController.text.trim(),
-              kind: credentialKind,
-              requiresBiometric: _requiresBiometric,
-              isEncrypted: _passphraseController.text.trim().isNotEmpty,
-            ) ??
-            CredentialRef(
-              id: _uuid.v4(),
-              label: _credentialLabelController.text.trim().isEmpty
-                  ? '$label credentials'
-                  : _credentialLabelController.text.trim(),
-              kind: credentialKind,
-              requiresBiometric: _requiresBiometric,
-              isEncrypted: _passphraseController.text.trim().isNotEmpty,
-            ))
-        : null;
 
     final preflightRequirements = switch (_networkMode) {
       NetworkMode.direct => const [PreflightRequirement.knownHostReview],
       NetworkMode.tailscaleNetwork => const [
-          PreflightRequirement.tailscaleClient,
-          PreflightRequirement.knownHostReview,
-        ],
+        PreflightRequirement.tailscaleClient,
+        PreflightRequirement.knownHostReview,
+      ],
       NetworkMode.tailscaleConsole => const [
-          PreflightRequirement.tailscaleClient,
-          PreflightRequirement.browserSignIn,
-        ],
+        PreflightRequirement.tailscaleClient,
+        PreflightRequirement.browserSignIn,
+      ],
       NetworkMode.cloudflareWarp => const [
-          PreflightRequirement.warpClient,
-          PreflightRequirement.knownHostReview,
-        ],
+        PreflightRequirement.warpClient,
+        PreflightRequirement.knownHostReview,
+      ],
       NetworkMode.cloudflareBrowser => const [
-          PreflightRequirement.warpClient,
-          PreflightRequirement.browserSignIn,
-        ],
+        PreflightRequirement.warpClient,
+        PreflightRequirement.browserSignIn,
+      ],
     };
 
     final profileId = initial?.id ?? _uuid.v4();
@@ -531,19 +591,97 @@ class _ServerEditorSheetState extends State<ServerEditorSheet> {
         primarySecret: _secretController.text.trim().isEmpty
             ? null
             : _secretController.text.trim(),
-        passphrase: _passphraseController.text.trim().isEmpty
-            ? null
-            : _passphraseController.text.trim(),
+        savedKeys: List.unmodifiable(_createdKeys),
       ),
     );
+  }
+
+  CredentialRef? get _selectedKey => _availableKeys
+      .cast<CredentialRef?>()
+      .firstWhere((key) => key?.id == _selectedKeyId, orElse: () => null);
+
+  CredentialRef? _passwordCredentialFor(
+    CredentialRef? initialCredential,
+    String profileLabel,
+  ) {
+    final initialIsReusable =
+        initialCredential != null &&
+        initialCredential.kind != CredentialKind.privateKey;
+    final hasContent =
+        _credentialLabelController.text.trim().isNotEmpty ||
+        _secretController.text.trim().isNotEmpty ||
+        initialIsReusable;
+    if (!hasContent) {
+      return null;
+    }
+
+    final credentialLabel = _credentialLabelController.text.trim().isEmpty
+        ? initialCredential?.label ?? '$profileLabel credentials'
+        : _credentialLabelController.text.trim();
+
+    if (initialIsReusable) {
+      return initialCredential.copyWith(
+        label: credentialLabel,
+        kind: CredentialKind.password,
+        requiresBiometric: _requiresBiometric,
+        isEncrypted: false,
+      );
+    }
+
+    return CredentialRef(
+      id: _uuid.v4(),
+      label: credentialLabel,
+      kind: CredentialKind.password,
+      requiresBiometric: _requiresBiometric,
+      isEncrypted: false,
+    );
+  }
+
+  String? _validateCredentialChoice(CredentialRef? initialCredential) {
+    if (_authMethod == AuthMethod.privateKey && _selectedKeyId == null) {
+      return 'Select a saved key before using private-key authentication.';
+    }
+
+    if (_authMethod != AuthMethod.privateKey) {
+      final hasExistingCredential =
+          initialCredential != null &&
+          initialCredential.kind != CredentialKind.privateKey;
+      final hasNewSecret = _secretController.text.trim().isNotEmpty;
+      if (!hasExistingCredential && !hasNewSecret) {
+        return _authMethod == AuthMethod.password
+            ? 'Enter a password for this server.'
+            : 'Enter a default interactive response for this server.';
+      }
+    }
+
+    return null;
+  }
+
+  Future<void> _createOrImportKey() async {
+    final material = await showModalBottomSheet<SavedKeyMaterial>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) =>
+          SavedKeyEditorSheet(sshKeyService: widget.sshKeyService),
+    );
+    if (material == null) {
+      return;
+    }
+
+    setState(() {
+      _createdKeys.add(material);
+      _availableKeys.removeWhere((key) => key.id == material.credential.id);
+      _availableKeys.add(material.credential);
+      _availableKeys.sort((a, b) => a.label.compareTo(b.label));
+      _selectedKeyId = material.credential.id;
+      _requiresBiometric = material.credential.requiresBiometric;
+    });
   }
 }
 
 class _Section extends StatelessWidget {
-  const _Section({
-    required this.title,
-    required this.child,
-  });
+  const _Section({required this.title, required this.child});
 
   final String title;
   final Widget child;
@@ -560,10 +698,7 @@ class _Section extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 14),
             child,
           ],
@@ -606,7 +741,9 @@ class _PortForwardDraft {
       bindHostController: TextEditingController(text: profile.bindHost),
       bindPortController: TextEditingController(text: '${profile.bindPort}'),
       targetHostController: TextEditingController(text: profile.targetHost),
-      targetPortController: TextEditingController(text: '${profile.targetPort}'),
+      targetPortController: TextEditingController(
+        text: '${profile.targetPort}',
+      ),
       autoStart: profile.autoStart,
     );
   }
@@ -625,7 +762,10 @@ class _PortForwardDraft {
     final targetPort = int.tryParse(targetPortController.text.trim());
     final bindHost = bindHostController.text.trim();
     final targetHost = targetHostController.text.trim();
-    if (bindPort == null || targetPort == null || bindHost.isEmpty || targetHost.isEmpty) {
+    if (bindPort == null ||
+        targetPort == null ||
+        bindHost.isEmpty ||
+        targetHost.isEmpty) {
       return null;
     }
     return PortForwardProfile(
@@ -637,7 +777,9 @@ class _PortForwardDraft {
       targetHost: targetHost,
       targetPort: targetPort,
       autoStart: autoStart,
-      label: labelController.text.trim().isEmpty ? null : labelController.text.trim(),
+      label: labelController.text.trim().isEmpty
+          ? null
+          : labelController.text.trim(),
     );
   }
 
@@ -651,10 +793,7 @@ class _PortForwardDraft {
 }
 
 class _PortForwardEditor extends StatefulWidget {
-  const _PortForwardEditor({
-    required this.draft,
-    required this.onRemove,
-  });
+  const _PortForwardEditor({required this.draft, required this.onRemove});
 
   final _PortForwardDraft draft;
   final VoidCallback onRemove;
