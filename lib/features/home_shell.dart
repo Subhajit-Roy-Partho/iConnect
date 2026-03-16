@@ -54,6 +54,7 @@ class HomeShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bootstrap = ref.watch(appBootstrapProvider);
+    final workspace = ref.watch(workspaceControllerProvider);
 
     return bootstrap.when(
       loading: () => const Scaffold(
@@ -63,9 +64,21 @@ class HomeShell extends ConsumerWidget {
         body: Center(child: Text('Bootstrap failed: $error')),
       ),
       data: (_) {
+        final terminalFocusMode = section == AppSection.sessions &&
+            workspace.terminalFocusMode &&
+            workspace.activeTab != null;
         final wide = MediaQuery.sizeOf(context).width >= 1100;
         final showInspector = MediaQuery.sizeOf(context).width >= 1420;
-        final content = _SectionViewport(section: section);
+        final content = _SectionViewport(
+          section: section,
+          immersive: terminalFocusMode,
+        );
+
+        if (terminalFocusMode) {
+          return Scaffold(
+            body: content,
+          );
+        }
 
         if (wide) {
           return Scaffold(
@@ -123,24 +136,28 @@ class HomeShell extends ConsumerWidget {
 class _SectionViewport extends StatelessWidget {
   const _SectionViewport({
     required this.section,
+    this.immersive = false,
   });
 
   final AppSection section;
+  final bool immersive;
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 200),
-        child: switch (section) {
-          AppSection.servers => const _ServersPage(),
-          AppSection.sessions => const _SessionsPage(),
-          AppSection.files => const _FilesPage(),
-          AppSection.snippets => const _SnippetsPage(),
-          AppSection.settings => const _SettingsPage(),
-        },
-      ),
+    final child = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      child: switch (section) {
+        AppSection.servers => const _ServersPage(),
+        AppSection.sessions => const _SessionsPage(),
+        AppSection.files => const _FilesPage(),
+        AppSection.snippets => const _SnippetsPage(),
+        AppSection.settings => const _SettingsPage(),
+      },
     );
+    if (immersive) {
+      return child;
+    }
+    return SafeArea(child: child);
   }
 }
 
@@ -473,6 +490,60 @@ class _SessionsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final workspace = ref.watch(workspaceControllerProvider);
     final preferences = ref.watch(appPreferencesProvider);
+    final focusMode =
+        workspace.terminalFocusMode && workspace.activeTab != null;
+
+    if (focusMode) {
+      final activeTab = workspace.activeTab!;
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: _TerminalPanel(
+              tab: activeTab,
+              fullscreen: true,
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: Text(
+                        activeTab.profile.label,
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelLarge
+                            ?.copyWith(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  FilledButton.tonalIcon(
+                    onPressed: () {
+                      ref
+                          .read(workspaceControllerProvider.notifier)
+                          .toggleTerminalFocusMode(false);
+                    },
+                    icon: const Icon(Icons.fullscreen_exit),
+                    label: const Text('Exit Full Screen'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -499,6 +570,17 @@ class _SessionsPage extends ConsumerWidget {
                         ? Icons.splitscreen
                         : Icons.crop_square_outlined,
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Make terminal full screen',
+                  onPressed: workspace.activeTab == null
+                      ? null
+                      : () {
+                          ref
+                              .read(workspaceControllerProvider.notifier)
+                              .toggleTerminalFocusMode(true);
+                        },
+                  icon: const Icon(Icons.fullscreen),
                 ),
               ],
             ),
@@ -585,13 +667,33 @@ class _SessionsPage extends ConsumerWidget {
 class _TerminalPanel extends StatelessWidget {
   const _TerminalPanel({
     required this.tab,
+    this.fullscreen = false,
   });
 
   final WorkspaceTab tab;
+  final bool fullscreen;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final terminalBody = switch (tab.status) {
+      WorkspaceTabStatus.browserFallback => _BrowserFallbackView(tab: tab),
+      _ => TerminalView(
+          tab.terminal,
+          theme: tab.session?.terminalTheme ??
+              terminalThemes[tab.profile.terminalTheme]!,
+          backgroundOpacity: 1,
+          deleteDetection: true,
+        ),
+    };
+
+    if (fullscreen) {
+      return ColoredBox(
+        color: tab.session?.terminalTheme.background ?? Colors.black,
+        child: terminalBody,
+      );
+    }
+
     return DecoratedBox(
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerLow,
@@ -612,18 +714,7 @@ class _TerminalPanel extends StatelessWidget {
             Expanded(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(20),
-                child: switch (tab.status) {
-                  WorkspaceTabStatus.browserFallback => _BrowserFallbackView(
-                      tab: tab,
-                    ),
-                  _ => TerminalView(
-                      tab.terminal,
-                      theme: tab.session?.terminalTheme ??
-                          terminalThemes[tab.profile.terminalTheme]!,
-                      backgroundOpacity: 1,
-                      deleteDetection: true,
-                    ),
-                },
+                child: terminalBody,
               ),
             ),
           ],

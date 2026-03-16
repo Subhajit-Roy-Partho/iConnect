@@ -64,11 +64,13 @@ class WorkspaceState {
     this.tabs = const [],
     this.activeTabId,
     this.splitViewEnabled = true,
+    this.terminalFocusMode = false,
   });
 
   final List<WorkspaceTab> tabs;
   final String? activeTabId;
   final bool splitViewEnabled;
+  final bool terminalFocusMode;
 
   WorkspaceTab? get activeTab =>
       tabs.firstWhereOrNull((tab) => tab.id == activeTabId);
@@ -77,11 +79,13 @@ class WorkspaceState {
     List<WorkspaceTab>? tabs,
     String? activeTabId,
     bool? splitViewEnabled,
+    bool? terminalFocusMode,
   }) {
     return WorkspaceState(
       tabs: tabs ?? this.tabs,
       activeTabId: activeTabId ?? this.activeTabId,
       splitViewEnabled: splitViewEnabled ?? this.splitViewEnabled,
+      terminalFocusMode: terminalFocusMode ?? this.terminalFocusMode,
     );
   }
 }
@@ -167,6 +171,7 @@ class WorkspaceController extends Notifier<WorkspaceState> {
     state = state.copyWith(
       tabs: remaining,
       activeTabId: remaining.isEmpty ? null : remaining.last.id,
+      terminalFocusMode: remaining.isEmpty ? false : state.terminalFocusMode,
     );
   }
 
@@ -177,6 +182,15 @@ class WorkspaceController extends Notifier<WorkspaceState> {
   void toggleSplitView([bool? enabled]) {
     state = state.copyWith(
       splitViewEnabled: enabled ?? !state.splitViewEnabled,
+    );
+  }
+
+  void toggleTerminalFocusMode([bool? enabled]) {
+    final hasActiveTab = state.activeTab != null;
+    state = state.copyWith(
+      terminalFocusMode: hasActiveTab
+          ? (enabled ?? !state.terminalFocusMode)
+          : false,
     );
   }
 
