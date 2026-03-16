@@ -828,8 +828,11 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
             title: 'Files',
             subtitle:
                 'Basic SFTP browser with preview, create, rename, delete, upload, and download.',
-            action: Row(
-              mainAxisSize: MainAxisSize.min,
+            action: OverflowBar(
+              spacing: 8,
+              overflowSpacing: 8,
+              alignment: MainAxisAlignment.start,
+              overflowAlignment: OverflowBarAlignment.start,
               children: [
                 IconButton(
                   onPressed: _session == null ? null : () => _refresh(),
@@ -844,7 +847,6 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
                   icon: const Icon(Icons.create_new_folder_outlined),
                   label: const Text('New Folder'),
                 ),
-                const SizedBox(width: 8),
                 OutlinedButton.icon(
                   onPressed: _session == null
                       ? null
@@ -861,6 +863,8 @@ class _FilesPageState extends ConsumerState<_FilesPage> {
             child: Text(
               _session == null ? 'No active SSH session' : _currentPath,
               style: Theme.of(context).textTheme.titleMedium,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
           const SizedBox(height: 16),
@@ -1809,21 +1813,40 @@ class _PageHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 4),
-              Text(subtitle),
-            ],
-          ),
-        ),
-        if (action != null) ...[const SizedBox(width: 12), action!],
+        Text(title, style: Theme.of(context).textTheme.headlineMedium),
+        const SizedBox(height: 4),
+        Text(subtitle),
       ],
+    );
+
+    if (action == null) {
+      return titleBlock;
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 700;
+        if (compact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [titleBlock, const SizedBox(height: 16), action!],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: titleBlock),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Align(alignment: Alignment.topRight, child: action!),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1859,13 +1882,16 @@ class _EmptyState extends StatelessWidget {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(title, style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 12),
-            Text(subtitle, textAlign: TextAlign.center),
-          ],
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 12),
+              Text(subtitle, textAlign: TextAlign.center),
+            ],
+          ),
         ),
       ),
     );

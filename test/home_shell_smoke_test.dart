@@ -18,11 +18,10 @@ void main() {
         host: 'lab.internal',
         port: 22,
         username: 'dev',
-        managedAccessConfig: const ManagedAccessConfig(mode: NetworkMode.direct),
-        jumpRoute: const JumpRoute(
-          profileId: 'profile-1',
-          hopProfileIds: [],
+        managedAccessConfig: const ManagedAccessConfig(
+          mode: NetworkMode.direct,
         ),
+        jumpRoute: const JumpRoute(profileId: 'profile-1', hopProfileIds: []),
       ),
     );
 
@@ -38,9 +37,7 @@ void main() {
           appRepositoryProvider.overrideWith((ref) => repository),
           appBootstrapProvider.overrideWith((ref) async {}),
         ],
-        child: const MaterialApp(
-          home: HomeShell(section: AppSection.servers),
-        ),
+        child: const MaterialApp(home: HomeShell(section: AppSection.servers)),
       ),
     );
 
@@ -48,5 +45,45 @@ void main() {
 
     expect(find.text('Servers'), findsWidgets);
     expect(find.text('Lab Node'), findsOneWidget);
+  });
+
+  testWidgets('renders files screen on a narrow phone without overflow', (
+    tester,
+  ) async {
+    final database = AppDatabase.inMemory();
+    final repository = AppRepository(database, seedDemoContent: false);
+    await repository.initialize();
+
+    addTearDown(() async {
+      await repository.dispose();
+      await database.close();
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    tester.view.physicalSize = const Size(1179, 2556);
+    tester.view.devicePixelRatio = 3;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(database),
+          appRepositoryProvider.overrideWith((ref) => repository),
+          appBootstrapProvider.overrideWith((ref) async {}),
+        ],
+        child: const MaterialApp(home: HomeShell(section: AppSection.files)),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'Basic SFTP browser with preview, create, rename, delete, upload, and download.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Connect first'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
